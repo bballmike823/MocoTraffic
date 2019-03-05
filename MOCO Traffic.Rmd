@@ -1,0 +1,112 @@
+---
+title: "Montgomery County Traffic Violations"
+author: "Michael Metzler"
+date: "March 3, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+####Load Libraries
+```{r load_libraries}
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(forcats)
+library(stringr)
+```
+
+####Load the Data
+The csv can be found at https://catalog.data.gov/dataset/traffic-violations-56dda
+```{r read_data}
+#The csv takes several minutes to load
+#If the rds has been created, loading that takes far less time
+traffic<-data.frame()
+if(file.exists("MOCO_traffic.rds")){
+  traffic <- readRDS("MOCO_traffic.rds")
+} else {
+  traffic <- readr::read_csv("Traffic_Violations.csv")
+  saveRDS(traffic,"MOCO_traffic.rds")
+}
+```
+
+
+####Format the Data
+```{r data_formatting}
+#convert the column names to camel case
+names(traffic) %<>% str_replace_all(" ","_") %>% tolower()
+#convert dates and times and convert yes/no to TRUE/FALSE
+traffic %<>% mutate(date_of_stop = lubridate::mdy(date_of_stop), time_of_stop = lubridate::hms(time_of_stop), accident = accident == "Yes", belts = belts == "Yes", personal_injury = personal_injury == "Yes", property_damage = property_damage == "Yes", fatal = fatal == "Yes", commercial_license = commercial_license == "Yes", hazmat = hazmat == "Yes", commercial_vehicle = commercial_vehicle == "Yes", alcohol = alcohol == "Yes", work_zone = work_zone == "Yes", contributed_to_accident = contributed_to_accident == "Yes") 
+#drop geolocation column which won't be used
+traffic %<>% select(-geolocation)
+#Add additional columns for the year, month, and day of the violation
+traffic %<>% mutate(year_of_stop = lubridate::year(date_of_stop), month_of_stop = lubridate::month(date_of_stop), month_year = lubridate::make_date(year = year_of_stop, month = month_of_stop), day_of_stop = lubridate::day(date_of_stop))
+#remove current year so that only complete years are included in the data
+traffic%<>%filter(year_of_stop != lubridate::year(Sys.Date()))
+```
+
+####Take a Look at the Data
+```{r}
+knitr::kable(head(traffic))
+```
+
+```{r}
+str(traffic)
+```
+
+```{r}
+ggplot(data = traffic) + geom_bar(aes(x = year_of_stop))+ggtitle("Traffic Violations by Year")+xlab("Year")+ylab("Violations")
+```
+
+```{r, fig.width= 12, fig.height = 10}
+plot_data <- traffic %>% group_by(month_year) %>% summarise(number_of_stops = n()) %>% ungroup() %>% mutate(month_of_stop = lubridate::month(month_year))
+#create plot
+plotly::ggplotly(ggplot(data = plot_data)+geom_col(aes(x = month_year, y = number_of_stops, fill = month_of_stop))+theme(legend.position = "none")+ggtitle("Traffic Violations over Time")+xlab("Time")+ylab("Number of Stops"))
+```
+
+####Are stops more likely at certain points of the month?
+
+```{r}
+plot_data <- traffic %>% mutate(point_in_month = (lubridate::period_to_seconds(lubridate::days(day_of_stop-1)) + lubridate::period_to_seconds(time_of_stop))/lubridate::period_to_seconds(lubridate::days(lubridate::days_in_month(date_of_stop))),point_in_month = (findInterval(point_in_month,(0:30)/30, all.inside = TRUE)-1)/30)
+
+ggplot(data = plot_data)+geom_bar(aes(x = point_in_month))+ggtitle("Are Violations More Likely at Certain Times of a Month")+xlab("Time of Month")+ylab("Violations")
+```
+```{r}
+clock_hours <- c(12,1:11)
+clock_minutes <- c(paste0(0,0:9),10:59)
+clock_am_pm <-c("AM","PM")
+clock_order<-character(length(clock_hours)*length(clock_minutes)*length(clock_am_pm))
+index<-1
+for(c_suffix in clock_am_pm){
+  for(c_hour in clock_hours){
+    for(c_minute in clock_minutes){
+      clock_order[index]<-paste0(c_hour,":",c_minute,c_suffix)
+      index<-index+1
+    }
+  }
+}
+```
+
+```{r}
+plot_data <- traffic%>%mutate(minute = lubridate::period_to_seconds(time_of_stop)/60)
+plotly::ggplotly(ggplot(data = plot_data) + geom_bar(aes(x = minute, text = clock_order[minute+1]))+ xlab("Time") + ylab("Number of Stops")+ggtitle("Number of Stops by Time of Day") + scale_x_continuous(breaks = (0:23)*60, labels = c("12:00AM", paste0(1:11,":00AM"), "12:00PM", paste0(1:11, ":00PM")))+ theme(axis.text.x = element_text(angle=90,hjust=1)))
+```
+
+```{r,fig.width=10,fig.height=10}
+#these are the furtest latitude/longitude for Montgomery County in any given direction, based on Google Maps
+north <- 39.36
+south <- 38.92
+west <- -77.55
+east <- -76.88
+ggplot(data = traffic%>%filter(longitude>west,longitude<east,latitude<north,latitude>south)) + geom_point(aes(x = longitude, y = latitude),alpha = .2, size = .1)+ggtitle("Where do Violations Occur?")
+```
+
+##Write up
+For this exam, I worked with the data set of traffic violationis in Montgomery County, Maryland. The dataset was found at https://catalog.data.gov/dataset/traffic-violations-56dda. I dropped the data from 2019, which is only partially complete. The data was mostly clean from the site, but I converted the dates and times using the lubridate package and converted the character Yes/No values into boolean TRUE/FALSE values. I chose this data set because I thought that it would be interesting to see if there are any trends in traffic enforcement/violations in the county. Overall, I didn't find too much that I would consider to be surprising. The peak in violations around midnight isn't unexpected. It is likely explained by an increase in drunk drivers in addition to the violations that would be regularly commited at any given time.
+
+I tried a number of visualizations. First I checked the number of violations recorded each year. The number of violations increased each year between 2012 and 2015, but has since leveled out and the number of violations are slightly down. Next I made the same graph, but upped the resolution to monthly. It showed mostly the same thing, but also revealed that there were a few months with random spikes in violations. I couldn't see any pattern in these months however.
+The next graph breaks down the violations by the point in the month at which they occurred. The goal of this graph was to see if monthly quotas were used that may cause an increase in violations at certain points in the month as officers try to meet the quota. The graph showed that violations were consistent at every point of the month, with no significant spikes or dips.
+Next, I looked at the time of day at which violations were issued. This graph showed a significant variation in the rate at which violations were issued depending on the time of day. Signifcantly more violations are issued at night, peaking around midnight. The fewest violations are issued around 5am, likely because much fewer drivers are on the road.
+Finally, I created a scatter plot based on the longitude and latitude of the violations. This more or less created a map of the county's most traveled roads. I had to filter out some of the longitude and latitude data which was well outside of the county's boundaries. There were a handful of data points that had longitude and latitudes which indicated that the violation ocurred hundreds of miles away from Montgomery County, including a few in the middle of the Atlantic Ocean. I found this graph to be pretty interesting, without using any special geospatial graphing, the county's boundaries are pretty clear, and the locations of the bigger cities and towns are quite visible.
